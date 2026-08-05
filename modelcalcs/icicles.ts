@@ -55,6 +55,10 @@ export class IciclesModel extends BaseModelClass {
         return this.numStrings * this.lightsPerString;
     }
 
+    getNumPhysicalStrings(): number {
+        return this.numStrings;
+    }
+
     parseDropPattern(): number[] {
         const sizes: number[] = [];
         const parts = this.dropPattern.split(',');

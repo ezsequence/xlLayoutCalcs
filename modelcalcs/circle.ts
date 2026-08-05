@@ -62,6 +62,10 @@ export class CircleModel extends BaseModelClass {
         return this.numStrings * this.nodesPerString;
     }
 
+    getNumPhysicalStrings(): number {
+        return this.numStrings;
+    }
+
     getStrandLength(strand: number): number {
         if (this.singleNode) return 1;
         return this.getLayerSize(this.getLayerSizeCount() - strand - 1);

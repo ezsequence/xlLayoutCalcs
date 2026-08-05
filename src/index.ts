@@ -11,7 +11,11 @@ export {
     type XlControllerInfo,
     type XlControllerActiveState,
     type XlControllerType,
+    type XlControllerOutput,
+    type XlControllerConnectionInfo,
     type XlModelChannelInfo,
+    type XlNetworkProtocol,
+    type XlPixelProtocol,
 } from '../modelcalcs/controllers';
 
 // Moving Head types and functions

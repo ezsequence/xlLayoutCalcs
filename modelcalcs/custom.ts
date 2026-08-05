@@ -160,6 +160,10 @@ export class CustomModel extends BaseModelClass {
         return nodeSet.size;
     }
 
+    getNumPhysicalStrings(): number {
+        return this.numStrings;
+    }
+
     parseModelData(): number[][][] {
         // Either attribute may be present but degenerate (e.g. newer xLights
         // writes CustomModel="" alongside real CustomModelCompressed data);

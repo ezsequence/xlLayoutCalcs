@@ -47,6 +47,10 @@ export class WreathModel extends BaseModelClass {
         return this.numStrings * this.nodesPerString;
     }
 
+    getNumPhysicalStrings(): number {
+        return this.numStrings;
+    }
+
     getNodeCoords(): GetNodeResult {
         const nodes: NodeLoc[] = [];
         let logicalBufferWidth = 1, logicalBufferHeight = 1, logicalBufferDepth = 1;

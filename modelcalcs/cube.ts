@@ -130,6 +130,10 @@ export class CubeModel extends BaseModelClass {
         return this.width * this.height * this.depth;
     }
 
+    getNumPhysicalStrings(): number {
+        return this.numStrings;
+    }
+
     getStartIndex(): number {
         const idx = startLocations.indexOf(this.start);
         return idx >= 0 ? idx : 0;

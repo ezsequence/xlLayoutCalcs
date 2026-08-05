@@ -61,6 +61,12 @@ export class CandyCaneModel extends BaseModelClass {
         return this.numCanes * this.segmentsPerCane;
     }
 
+    // Each cane is one physical string (mirrors xLights CandyCaneModel,
+    // where parm1 = number of canes = number of strings).
+    getNumPhysicalStrings(): number {
+        return this.numCanes;
+    }
+
     getNodeCoords(): GetNodeResult {
         const nodes: NodeLoc[] = [];
         let logicalBufferWidth = 1, logicalBufferHeight = 1, logicalBufferDepth = 1;

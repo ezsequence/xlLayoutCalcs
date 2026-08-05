@@ -60,6 +60,10 @@ export class SphereModel extends BaseModelClass {
         return this.numStrings * this.pixelsPerString;
     }
 
+    getNumPhysicalStrings(): number {
+        return this.numStrings;
+    }
+
     getNodeCoords(): GetNodeResult {
         const nodes: NodeLoc[] = [];
 

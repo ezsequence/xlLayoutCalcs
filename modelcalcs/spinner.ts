@@ -57,6 +57,10 @@ export class SpinnerModel extends BaseModelClass {
         return this.numStrings * this.nodesPerArm * this.armsPerString;
     }
 
+    getNumPhysicalStrings(): number {
+        return this.numStrings;
+    }
+
     getNodeCoords(): GetNodeResult {
         const nodes: NodeLoc[] = [];
 

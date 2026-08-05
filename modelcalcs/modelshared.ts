@@ -110,6 +110,23 @@ export abstract class BaseModelClass implements BaseModel {
             superStringColourCount: this.superStringColours.size,
         };
     }
+
+    /**
+     * Number of PHYSICAL strings this model's geometry declares (the xLights
+     * "# Strings" / parm1-style property) — the count a controller-port
+     * spreader cares about.
+     *
+     * The base implementation reports what the channel machinery uses
+     * (`getChannelInfo().numStrings`), which is accurate for classes that
+     * override getChannelInfo (Arches, Matrix, Single Line) and 1 for the
+     * rest.  Classes that keep the single-run getChannelInfo but still
+     * declare a string count (Tree, Circle, Star, Icicles, Spinner, Cube,
+     * Custom, Wreath, Sphere, Candy Canes) override this to return the
+     * declared count.
+     */
+    getNumPhysicalStrings(): number {
+        return this.getChannelInfo().numStrings;
+    }
 }
 
 export function rotationMatrixFromXAxisToVector(a: vec3): mat4 {

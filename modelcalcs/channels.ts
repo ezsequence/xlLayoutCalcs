@@ -62,6 +62,9 @@ export function parseNetworksXml(xmlDoc: Document): OutputManager {
         const id = ctrlElem.getAttribute('Id') || '';
         const name = ctrlElem.getAttribute('Name') || '';
         const ip = ctrlElem.getAttribute('IP') || undefined;
+        // On Serial controllers BaudRate is the actual baud rate, not a
+        // universe number — keep their outputs out of the universe map.
+        const isSerial = ctrlElem.getAttribute('Type') === 'Serial';
 
         const controllerStartChannel = currentChannel;
         const outputs: Output[] = [];
@@ -70,11 +73,13 @@ export function parseNetworksXml(xmlDoc: Document): OutputManager {
         const networkElements = getChildElementsByTag(ctrlElem, 'network');
 
         for (const netElem of networkElements) {
-            const maxChannels = parseInt(netElem.getAttribute('MaxChannels') || '512', 10);
+            // 510 matches parseControllers' default (E1.31 universe size);
+            // real files always write MaxChannels so this is defensive only.
+            const maxChannels = parseInt(netElem.getAttribute('MaxChannels') || '510', 10);
             // Real xLights stores the universe number in the BaudRate attribute
             // (upstream IPOutput.cpp: append_attribute("BaudRate") = _universe).
             // A separate Universe attribute wins when present (synthetic files).
-            const universe = parseInt(
+            const universe = isSerial ? 0 : parseInt(
                 netElem.getAttribute('Universe') || netElem.getAttribute('BaudRate') || '1', 10);
             const universeCount = parseInt(netElem.getAttribute('UniverseCount') || '1', 10);
             const networkType = netElem.getAttribute('NetworkType') || 'E131';
@@ -92,13 +97,15 @@ export function parseNetworksXml(xmlDoc: Document): OutputManager {
 
                 outputs.push(output);
 
-                // Register in universe lookup
-                const universeKey = `${universe + u}`;
-                outputsByUniverse.set(universeKey, output);
+                // Register in universe lookup (never for serial outputs)
+                if (!isSerial) {
+                    const universeKey = `${universe + u}`;
+                    outputsByUniverse.set(universeKey, output);
 
-                if (outputIp) {
-                    const ipUniverseKey = `${outputIp}:${universe + u}`;
-                    outputsByUniverse.set(ipUniverseKey, output);
+                    if (outputIp) {
+                        const ipUniverseKey = `${outputIp}:${universe + u}`;
+                        outputsByUniverse.set(ipUniverseKey, output);
+                    }
                 }
 
                 currentChannel += maxChannels;
