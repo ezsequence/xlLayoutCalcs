@@ -6,7 +6,8 @@ import {
     ModelType,
     GetNodeResult,
 } from "./modelbase";
-import { defEffectBufferDescriptionOutput } from "./modelshared";
+import { getChannelsPerNode } from "./channels";
+import { ModelChannelInfo, defEffectBufferDescriptionOutput } from "./modelshared";
 import { defNodeCoord } from "./modelshared";
 import { defNodeLoc } from "./modelshared";
 import { getWorldMatrixForBoxed } from "./modelshared";
@@ -164,6 +165,84 @@ export class CustomModel extends BaseModelClass {
         return this.numStrings;
     }
 
+    /** Highest node number appearing in the grid — xLights' GetCustomMaxChannel.
+     *  This (not the distinct-node count) is what xLights sizes strings with. */
+    getMaxNodeValue(): number {
+        const locations = this.parseModelData();
+        let maxval = 0;
+        for (const layer of locations) {
+            for (const row of layer) {
+                for (const col of row) {
+                    if (col > 0) maxval = Math.max(maxval, col);
+                }
+            }
+        }
+        return maxval;
+    }
+
+    /**
+     * Multi-string custom models place each string at a start NODE inside the
+     * model's single channel range: explicit `String<N>` attrs when present,
+     * otherwise xLights' computed default. Per-string node counts run to the
+     * next-higher start node. Mirrors CustomModel::SetStringStartChannels /
+     * NodesPerString(int) — including the "starts need not be ascending" and
+     * "counts need not be equal" cases the base even-split can't express.
+     */
+    getChannelInfo(): ModelChannelInfo {
+        const strings = this.numStrings;
+        const maxval = this.getMaxNodeValue();
+        if (maxval <= 0) {
+            return super.getChannelInfo();
+        }
+        if (strings <= 1) {
+            // xLights addresses custom-model nodes by node NUMBER: node N sits
+            // at start + (N-1)*cpn and the model spans maxval*cpn channels
+            // (CustomModel::SetStringStartChannels / InitCustomMatrix).  A grid
+            // that skips a number (e.g. 1..118, 120..394) therefore leaves a
+            // hole in the channel range rather than compacting — so the run
+            // must cover maxval nodes, not the distinct-node count, or the
+            // nodes above the gap fall off the end of the mapping.
+            return { ...super.getChannelInfo(), nodesPerString: [maxval] };
+        }
+
+        const cpn = getChannelsPerNode(this.stringType || 'RGB Nodes', this.superStringColours.size);
+        // xLights: ChannelsPerString = maxval * cpn / _strings (integer),
+        // default start node = (ChannelsPerString * i) / cpn + 1 (integer).
+        const channelsPerString = Math.floor((maxval * cpn) / strings);
+        const starts: number[] = [];
+        for (let i = 0; i < strings; i++) {
+            let node = this.stringStartNodes.get(i) ?? -1;
+            if (node < 0) node = Math.floor((channelsPerString * i) / cpn) + 1;
+            if (node > maxval) node = maxval;
+            starts.push(node);
+        }
+
+        // Count = distance to the nearest higher start, last string(s) run to
+        // the end of the model (CustomModel::NodesPerString(int)).
+        const lowest = Math.min(...starts);
+        const counts = starts.map((ss) => {
+            let len = maxval - (ss - lowest);
+            for (const other of starts) {
+                if (other > ss && other - ss < len) len = other - ss;
+            }
+            return len;
+        });
+
+        return {
+            name: this.name,
+            startChannel: this.startChannel || '1',
+            stringType: this.stringType || 'RGB Nodes',
+            numStrings: strings,
+            nodesPerString: counts,
+            // String<N> on a custom model is always a node number — never a
+            // per-string start channel, even when Advanced="1".
+            advanced: false,
+            stringStartChannels: new Map(),
+            stringStartNodes: new Map(starts.map((node, i) => [i, node])),
+            superStringColourCount: this.superStringColours.size,
+        };
+    }
+
     parseModelData(): number[][][] {
         // Either attribute may be present but degenerate (e.g. newer xLights
         // writes CustomModel="" alongside real CustomModelCompressed data);
@@ -191,17 +270,40 @@ export class CustomModel extends BaseModelClass {
         const height = locations[0].length;
         const width = locations[0][0].length;
 
-        // Find maximum node number
+        // Find maximum node number and the populated bounding box.  Since
+        // xLights 2026.11 ("Keep the custom model centered in the bounding
+        // box", #6452) model/screen coords are centered on the populated
+        // cells' extents, not the grid dimensions.
         let maxval = 0;
-        for (const layer of locations) {
-            for (const row of layer) {
-                for (const col of row) {
-                    if (col > 0) {
-                        maxval = Math.max(maxval, col);
+        let minRow = height - 1, maxRow = 0;
+        let minCol = width - 1, maxCol = 0;
+        let minLayer = depth - 1, maxLayer = 0;
+        for (let l = 0; l < locations.length; l++) {
+            const layer = locations[l];
+            for (let r = 0; r < layer.length; r++) {
+                const row = layer[r];
+                for (let c = 0; c < row.length; c++) {
+                    const val = row[c];
+                    if (val > 0) {
+                        maxval = Math.max(maxval, val);
+                        if (r < minRow) minRow = r;
+                        if (r > maxRow) maxRow = r;
+                        if (c < minCol) minCol = c;
+                        if (c > maxCol) maxCol = c;
+                        if (l < minLayer) minLayer = l;
+                        if (l > maxLayer) maxLayer = l;
                     }
                 }
             }
         }
+        if (maxval === 0) {
+            minRow = 0; maxRow = height - 1;
+            minCol = 0; maxCol = width - 1;
+            minLayer = 0; maxLayer = depth - 1;
+        }
+        const centerRow = (minRow + maxRow) / 2.0;
+        const centerCol = (minCol + maxCol) / 2.0;
+        const centerLayer = (minLayer + maxLayer) / 2.0;
 
         const nodemap: number[] = new Array(maxval + 1).fill(-1);
 
@@ -235,9 +337,9 @@ export class CustomModel extends BaseModelClass {
                             coord.bufX = layerIdx * width + colIdx;
                             coord.bufY = height - rowIdx - 1;
                             // Model coords use parsed data dimensions (matches C++ lines 952-954)
-                            coord.modelX = colIdx - width / 2.0;
-                            coord.modelY = height - rowIdx - 1.0 - height / 2.0;
-                            coord.modelZ = depth - layerIdx - 1.0 - depth / 2.0;
+                            coord.modelX = colIdx - centerCol;
+                            coord.modelY = centerRow - rowIdx;
+                            coord.modelZ = centerLayer - layerIdx;
 
                             nn.coords.push(coord);
                             nn.logicalX = coord.bufX;
@@ -251,9 +353,9 @@ export class CustomModel extends BaseModelClass {
                             coord.bufX = layerIdx * width + colIdx;
                             coord.bufY = height - rowIdx - 1;
                             // Model coords use parsed data dimensions (matches C++ lines 959-961)
-                            coord.modelX = colIdx - width / 2.0;
-                            coord.modelY = height - rowIdx - 1.0 - height / 2.0;
-                            coord.modelZ = depth - layerIdx - 1.0 - depth / 2.0;
+                            coord.modelX = colIdx - centerCol;
+                            coord.modelY = centerRow - rowIdx;
+                            coord.modelZ = centerLayer - layerIdx;
                             existingNode.coords.push(coord);
                         }
                     }

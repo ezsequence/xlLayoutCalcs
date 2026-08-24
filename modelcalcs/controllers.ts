@@ -572,19 +572,19 @@ function parseControllers(networksDoc: Document): XlControllerInfo[] {
  * Preference order:
  *  1. The channel mapping's own per-string runs, when the model class
  *     reports more than one string to the channel machinery (Arches —
- *     including unequal layered arches — Matrix, Single Line).  This also
- *     carries advanced-mode (individual start channel) placement exactly.
+ *     including unequal layered arches — Matrix, Single Line, and Custom,
+ *     whose per-string start nodes and unequal counts come through the
+ *     mapping exactly).  This also carries advanced-mode (individual start
+ *     channel) placement exactly.
  *  2. The geometry's declared physical string count
  *     (BaseModelClass.getNumPhysicalStrings — Tree, Circle, Star, Icicles,
- *     Spinner, Cube, Custom, Wreath, Sphere, Candy Canes), split by EQUAL
- *     division of the node count with consecutive channels.  Equal division
- *     is exactly what those geometries define (numStrings × nodesPerString
- *     and variants); it is also what xLights CustomModel does channel-wise
- *     when the node count divides evenly.
- *  3. Single string covering the whole model (also the fallback when the
- *     node count does not divide evenly by the declared count — e.g. a
- *     Custom model whose max cell value isn't a multiple of its string
- *     count — where no faithful split is derivable from the geometry).
+ *     Spinner, Cube, Wreath, Sphere, Candy Canes), split by floor division
+ *     of the node count with consecutive channels: string s starts at node
+ *     floor(total*s/count)+1, matching xLights' default string start
+ *     computation.  For the usual evenly-divisible geometries this IS the
+ *     equal split those geometries define; a non-divisible count spreads
+ *     the remainder instead of collapsing to a single string.
+ *  3. Single string covering the whole model.
  */
 function derivePhysicalStrings(
     mapping: ModelChannelMapping,
@@ -602,14 +602,21 @@ function derivePhysicalStrings(
 
     const totalNodes = mapping.totalNodes;
     const declared = modelObj ? modelObj.getNumPhysicalStrings() : 1;
-    if (declared > 1 && totalNodes > 0 && totalNodes % declared === 0) {
-        const nodesPerString = totalNodes / declared;
+    if (declared > 1 && totalNodes >= declared) {
+        // Floor-division split: for divisible counts this is the equal split
+        // the geometry defines; otherwise the remainder is spread the way
+        // xLights computes default string starts (never collapse to 1).
+        const startNodes: number[] = [];
+        for (let s = 0; s < declared; s++) {
+            startNodes.push(Math.floor((totalNodes * s) / declared) + 1);
+        }
         const stringNodeCounts: number[] = [];
         const stringStartChannels: number[] = [];
         for (let s = 0; s < declared; s++) {
-            stringNodeCounts.push(nodesPerString);
+            const nextStart = s + 1 < declared ? startNodes[s + 1] : totalNodes + 1;
+            stringNodeCounts.push(nextStart - startNodes[s]);
             stringStartChannels.push(
-                mapping.firstChannel + 1 + s * nodesPerString * mapping.channelsPerNode);
+                mapping.firstChannel + 1 + (startNodes[s] - 1) * mapping.channelsPerNode);
         }
         return { numPhysicalStrings: declared, stringNodeCounts, stringStartChannels };
     }

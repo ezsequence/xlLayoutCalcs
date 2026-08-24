@@ -514,6 +514,8 @@ export interface ModelChannelInput {
     advanced: boolean;                 // Whether using per-string start channels
     stringStartChannels: Map<number, string>;  // Per-string start channels if advanced
     superStringColourCount: number;    // Number of colours for Superstring type
+    // Per-string start NODE numbers (Custom models; see ModelChannelInfo).
+    stringStartNodes?: Map<number, number>;
 }
 
 /**
@@ -530,6 +532,19 @@ export function buildModelChannelMapping(
     const channelsPerNode = getChannelsPerNode(model.stringType, model.superStringColourCount);
     const nodeChannelMap: ChannelRun[] = [];
 
+    // Custom-model placement: every string is an offset from the ONE model
+    // start channel, so resolve it once up front. (String starts need not be
+    // ascending, so this cannot be expressed as sequential chaining.)
+    const startNodes = model.numStrings > 1 ? model.stringStartNodes : undefined;
+    let baseStartChannel: number | null = null;
+    if (startNodes) {
+        baseStartChannel = resolveStartChannelString(model.startChannel, outputManager, resolvedModels, logger);
+        if (baseStartChannel === null) {
+            // Dependency not yet resolved
+            return null;
+        }
+    }
+
     let nodeIndex = 0;
     let minChannel = Infinity;
     let maxChannel = -1;
@@ -541,7 +556,9 @@ export function buildModelChannelMapping(
         // Determine start channel for this string
         let startChannel: number | null;
 
-        if (model.advanced && model.stringStartChannels.has(s)) {
+        if (startNodes && baseStartChannel !== null && startNodes.has(s)) {
+            startChannel = baseStartChannel + (startNodes.get(s)! - 1) * channelsPerNode;
+        } else if (model.advanced && model.stringStartChannels.has(s)) {
             // Advanced mode: each string has its own start channel
             startChannel = resolveStartChannelString(
                 model.stringStartChannels.get(s)!,
@@ -565,7 +582,10 @@ export function buildModelChannelMapping(
         }
 
         const run: ChannelRun = {
-            nodeStart: nodeIndex,
+            // With explicit start nodes the run covers node values
+            // [startNode, startNode + count), so index by value rather than
+            // by accumulation — string order need not follow node order.
+            nodeStart: startNodes?.has(s) ? startNodes.get(s)! - 1 : nodeIndex,
             nodeCount: nodesInString,
             channelStart: startChannel,
             channelsPerNode,
@@ -613,6 +633,8 @@ export interface ModelForResolution {
     advanced: boolean;
     stringStartChannels: Map<number, string>;
     superStringColourCount: number;
+    // Per-string start NODE numbers (Custom models; see ModelChannelInfo).
+    stringStartNodes?: Map<number, number>;
 }
 
 export interface ResolvedModelWithMapping extends ResolvedModel {
@@ -666,6 +688,7 @@ export function resolveAllModelChannels(
                 advanced: model.advanced,
                 stringStartChannels: model.stringStartChannels,
                 superStringColourCount: model.superStringColourCount,
+                stringStartNodes: model.stringStartNodes,
             };
 
             const mapping = buildModelChannelMapping(input, outputManager, resolvedForLookup, logger);

@@ -211,10 +211,11 @@ export function createModelFromXml(mxml: Element, options?: ModelParseOptions): 
         // Parse NodeStart1, NodeStart2, ... NodeStartN (starting node numbers
         // per string).  Both formats use this name — fork and upstream agree
         // on CustomModel::StartNodeAttrName = "NodeStart" + (idx + 1).
-        // Old non-advanced multi-string customs may instead carry String1..N
-        // (upstream DeserializeCustom falls back to those as start NODES when
-        // Advanced is off; when Advanced is on, String<N> means per-string
-        // start CHANNELS and is handled by the base-model parsing below).
+        // Multi-string customs may instead carry String1..N — and on a Custom
+        // model those are ALWAYS start NODES, never per-string start channels,
+        // even when Advanced="1" (CustomModel::SetStringStartChannels has no
+        // advanced branch; it reads String<N> as a node offset from the one
+        // model start channel unconditionally).
         const numStrings = customModel.numStrings || 1;
         for (let i = 0; i <= Math.max(numStrings, 50); i++) {
             const nodeStartAttr = `NodeStart${i + 1}`;
@@ -223,7 +224,7 @@ export function createModelFromXml(mxml: Element, options?: ModelParseOptions): 
                 const startNode = getIntAttrDef(mxml, nodeStartAttr, 0);
                 customModel.stringStartNodes.set(i, startNode);
                 usedTags.add(nodeStartAttr);
-            } else if (!m.advanced && mxml.hasAttribute(legacyAttr)) {
+            } else if (mxml.hasAttribute(legacyAttr)) {
                 const startNode = getIntAttrDef(mxml, legacyAttr, 0);
                 customModel.stringStartNodes.set(i, startNode);
                 usedTags.add(legacyAttr);

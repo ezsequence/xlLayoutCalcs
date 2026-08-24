@@ -14,6 +14,15 @@ export interface ModelChannelInfo {
     advanced: boolean;
     stringStartChannels: Map<number, string>;
     superStringColourCount: number;  // Number of colours in a superstring (0 if not superstring)
+    /**
+     * Per-string start NODE numbers (1-based, keyed by 0-based string index).
+     * Custom models place their strings this way (`String<N>` attrs are node
+     * numbers offset from the single model start channel — never per-string
+     * start channels, even in Advanced mode). When present, each string's
+     * channel start is modelStart + (node - 1) * channelsPerNode and
+     * `advanced`/`stringStartChannels` are not consulted.
+     */
+    stringStartNodes?: Map<number, number>;
 }
 
 export abstract class BaseModelClass implements BaseModel {
