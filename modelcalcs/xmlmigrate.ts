@@ -1,11 +1,15 @@
 /**
  * XML migration between xLights layout format versions.
  *
- * Two format versions are recognized:
- *   'x2026_2' — the format used by xLights through 2026.2 (and derived forks)
- *   'x2026_3' — the format introduced in xLights 2026.3+ (current upstream)
+ * Three format versions are recognized:
+ *   'x2026_2'  — the format used by xLights through 2026.2 (and derived forks)
+ *   'x2026_3'  — the format introduced in xLights 2026.3+
+ *   'x2026_15' — x2026_3 schema plus view-object types (Controller) that
+ *                earlier versions cannot load
  *
- * Handles migration in either direction for xlights_rgbeffects.xml.
+ * Handles migration in either direction for xlights_rgbeffects.xml.  Every
+ * migration also removes <view_object>s the target cannot load
+ * (VIEW_OBJECT_ALLOW_LIST).
  * xlights_networks.xml schema is identical across versions — no migration needed.
  *
  * Usage with @xmldom/xmldom:
@@ -206,22 +210,66 @@ function buildReverseParmLookup(mapping: ParmMapping): Record<string, string> {
 /** The XML file types we recognize. */
 export type XlFileType = 'rgbeffects' | 'networks' | 'unknown';
 
-/** The schema variant for rgbeffects files. */
-export type XlFormat = 'x2026_2' | 'x2026_3' | 'indeterminate';
+/**
+ * The schema variant for rgbeffects files.  'x2026_15' is reported only when
+ * a 2026.15-only view object is present; otherwise the file reads as 'x2026_3'.
+ */
+export type XlFormat = 'x2026_2' | 'x2026_3' | 'x2026_15' | 'indeterminate';
 
 export interface XlFileIdentification {
     /** What kind of xLights XML file this is. */
     fileType: XlFileType;
     /**
-     * For rgbeffects: 'x2026_2' or 'x2026_3' based on structural signals.
+     * For rgbeffects: 'x2026_2', 'x2026_3' or 'x2026_15' based on structural signals.
      * For networks: always 'indeterminate' (schema is identical).
      * For unknown: always 'indeterminate'.
      */
     format: XlFormat;
-    /** Signals that pointed toward x2026_3 format. */
+    /** Signals that pointed toward x2026_3 (or later) format. */
     x2026_3_signals: string[];
     /** Signals that pointed toward x2026_2 format. */
     x2026_2_signals: string[];
+}
+
+// ---------------------------------------------------------------------------
+// View-object support by target version
+// ---------------------------------------------------------------------------
+
+/**
+ * <view_object DisplayAs="..."> values each target version can load; anything
+ * else is removed on migration, since an unknown type crashes xLights at load.
+ * 'Terrain' stays allowed for x2026_2 because the fork reads both spellings.
+ */
+export const VIEW_OBJECT_ALLOW_LIST: Readonly<Record<TargetFormat, readonly string[]>> = {
+    x2026_2:  ['Gridlines', 'Image', 'Mesh', 'Ruler', 'Terrian', 'Terrain'],
+    x2026_3:  ['Gridlines', 'Image', 'Mesh', 'Ruler', 'Terrian', 'Terrain'],
+    x2026_15: ['Gridlines', 'Image', 'Mesh', 'Ruler', 'Terrian', 'Terrain', 'Controller'],
+};
+
+/** View-object DisplayAs values that only exist from 2026.15 on. */
+const X2026_15_ONLY_VIEW_OBJECTS: ReadonlySet<string> = new Set(
+    VIEW_OBJECT_ALLOW_LIST.x2026_15.filter(t => !VIEW_OBJECT_ALLOW_LIST.x2026_3.includes(t)));
+
+/**
+ * Delete every <view_object> whose DisplayAs is not on the allow list for the
+ * target format.  Idempotent.  Appends one entry per removed object to
+ * `changes` (if given) and returns the number removed.
+ */
+export function filterViewObjectsForFormat(doc: Document, target: TargetFormat, changes?: string[]): number {
+    const root = doc.documentElement;
+    if (!root) return 0;
+    const viewObjNode = getOptionalElementByTag(root, 'view_objects');
+    if (!viewObjNode) return 0;
+    const allowed = VIEW_OBJECT_ALLOW_LIST[target];
+    let removed = 0;
+    for (const obj of getChildElementsByTag(viewObjNode, 'view_object')) {
+        const da = obj.getAttribute('DisplayAs') || '';
+        if (allowed.includes(da)) continue;
+        viewObjNode.removeChild(obj);
+        removed++;
+        changes?.push(`Removed view_object "${obj.getAttribute('name') || ''}" (DisplayAs="${da}" not supported by ${target})`);
+    }
+    return removed;
 }
 
 /**
@@ -346,9 +394,23 @@ export function identifyXml(doc: Document): XlFileIdentification {
         }
     }
 
+    // Signal 8: 2026.15-only view-object types; refines an x2026_3 verdict to x2026_15
+    let has2026_15ViewObjects = false;
+    const viewObjNode = getOptionalElementByTag(root, 'view_objects');
+    if (viewObjNode) {
+        for (const obj of getChildElementsByTag(viewObjNode, 'view_object')) {
+            const da = obj.getAttribute('DisplayAs') || '';
+            if (X2026_15_ONLY_VIEW_OBJECTS.has(da)) {
+                newSignals.push(`<view_object DisplayAs="${da}"> (2026.15+)`);
+                has2026_15ViewObjects = true;
+                break;
+            }
+        }
+    }
+
     let format: XlFormat;
     if (newSignals.length > oldSignals.length) {
-        format = 'x2026_3';
+        format = has2026_15ViewObjects ? 'x2026_15' : 'x2026_3';
     } else if (oldSignals.length > newSignals.length) {
         format = 'x2026_2';
     } else {
@@ -450,7 +512,8 @@ function appendEffectChildren(doc: Document, parent: Element, items: EffectPrese
 // ---------------------------------------------------------------------------
 
 export type MigrationDirection = 'forward' | 'backward';
-export type TargetFormat = 'x2026_2' | 'x2026_3';
+/** Migration targets.  'x2026_3' and 'x2026_15' share a model schema and differ only in allowed view objects. */
+export type TargetFormat = 'x2026_2' | 'x2026_3' | 'x2026_15';
 
 export interface MigrationResult {
     /** The mutated document (same reference that was passed in). */
@@ -458,8 +521,8 @@ export interface MigrationResult {
     /** What format the document was in before migration. */
     detectedFormat: XlFormat;
     /**
-     * When migrating to x2026_3: JSON string for xlights_effectpresets.json
-     * (undefined if no effects node was found or already x2026_3).
+     * When migrating to x2026_3/x2026_15: JSON string for xlights_effectpresets.json
+     * (undefined if no effects node was found or already in the upstream schema).
      * When migrating to x2026_2: undefined.
      */
     effectPresetsJson?: string;
@@ -467,12 +530,24 @@ export interface MigrationResult {
     changes: string[];
 }
 
+/** The model-schema family a format belongs to; undefined for 'indeterminate'. */
+function schemaFamily(f: XlFormat | TargetFormat): 'legacy' | 'upstream' | undefined {
+    switch (f) {
+        case 'x2026_2': return 'legacy';
+        case 'x2026_3':
+        case 'x2026_15': return 'upstream';
+        default: return undefined;
+    }
+}
+
 /**
  * Idempotent migration: detect current format, then convert to the target.
  * If the document is already in the target format, returns with an empty changes list.
+ * The schema transform runs only when crossing the x2026_2 ↔ x2026_3 family
+ * boundary; view objects the target cannot load are always pruned.
  *
  * @param doc        Parsed XML Document (from @xmldom/xmldom DOMParser)
- * @param target     'x2026_2' or 'x2026_3'
+ * @param target     'x2026_2', 'x2026_3' or 'x2026_15'
  * @param effectPresetsJsonStr  When targeting x2026_2: optional JSON string
  *                              from xlights_effectpresets.json to embed into XML.
  */
@@ -486,19 +561,24 @@ export function migrateToFormat(
         throw new Error(`Not an rgbeffects file (root element: <${doc.documentElement?.tagName || '?'}>)`);
     }
 
-    // Already in target format — no-op
-    if (id.format === target) {
-        return { doc, detectedFormat: id.format, changes: [] };
+    const changes: string[] = [];
+    let effectPresetsJson: string | undefined;
+
+    // Schema transform only when crossing families (indeterminate always runs; the transforms are idempotent)
+    if (schemaFamily(id.format) !== schemaFamily(target)) {
+        if (target === 'x2026_2') {
+            const result = migrateBackward(doc, effectPresetsJsonStr);
+            changes.push(...result.changes);
+        } else {
+            const result = migrateForward(doc);
+            changes.push(...result.changes);
+            effectPresetsJson = result.effectPresetsJson;
+        }
     }
 
-    // Apply the appropriate direction
-    if (target === 'x2026_3') {
-        const result = migrateForward(doc);
-        return { ...result, detectedFormat: id.format };
-    } else {
-        const result = migrateBackward(doc, effectPresetsJsonStr);
-        return { ...result, detectedFormat: id.format };
-    }
+    filterViewObjectsForFormat(doc, target, changes);
+
+    return { doc, detectedFormat: id.format, effectPresetsJson, changes };
 }
 
 /**
@@ -506,6 +586,7 @@ export function migrateToFormat(
  *
  * @param doc        Parsed XML Document (from @xmldom/xmldom DOMParser)
  * @param direction  'forward' = x2026_2→x2026_3, 'backward' = x2026_3→x2026_2
+ *                   (both also prune view objects the resulting version cannot load)
  * @param effectPresetsJsonStr  For backward migration: the contents of
  *                              xlights_effectpresets.json to embed back into XML.
  *                              Ignored for forward migration.
@@ -518,9 +599,11 @@ export function migrateRgbEffects(
     const id = identifyXml(doc);
     if (direction === 'forward') {
         const result = migrateForward(doc);
+        filterViewObjectsForFormat(doc, 'x2026_3', result.changes);
         return { ...result, detectedFormat: id.format };
     } else {
         const result = migrateBackward(doc, effectPresetsJsonStr);
+        filterViewObjectsForFormat(doc, 'x2026_2', result.changes);
         return { ...result, detectedFormat: id.format };
     }
 }

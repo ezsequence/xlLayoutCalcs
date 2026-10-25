@@ -53,6 +53,18 @@ export interface ModelParseOptions {
     warnUnusedAttrs?: boolean;
     /** Sink for parser-emitted warnings.  Default: `console.log`. */
     logger?: (msg: string) => void;
+    /** Custom model placement. 'grid' (default): the declared
+     *  CustomWidth x CustomHeight x Depth grid is centred on the model
+     *  position, as xLights did before 2026.11, so empty border rows keep the
+     *  model where it was laid out. 'bbox': xLights 2026.11+ and crazd centre
+     *  the populated cells on the position. */
+    customModelCentering?: 'grid' | 'bbox';
+    /** Custom model grid size. 'declared' (default): the parsed cells are
+     *  padded to CustomWidth x CustomHeight x Depth, so buffer rows count from
+     *  the declared bottom row. 'data': the grid ends at the last populated
+     *  row / column / layer, as xLights and crazd parse it, so trailing empty
+     *  rows move the cells down the buffer. */
+    customModelGrid?: 'declared' | 'data';
 }
 
 export function createModelFromXml(mxml: Element, options?: ModelParseOptions): BaseModelClass {
@@ -107,6 +119,7 @@ export function createModelFromXml(mxml: Element, options?: ModelParseOptions): 
     }
 
     if (!m) throw new Error(`Unable to create model ${da}`);
+    m.parseOptions = options ?? {};
 
     // Bind XML attributes to model fields.
     const usedTags: Set<string> = new Set();
@@ -192,13 +205,14 @@ export function createModelFromXml(mxml: Element, options?: ModelParseOptions): 
             }
         }
 
-        // Parse PolyNode1, PolyNode2, ... PolyNodeN (node counts per string)
+        // Parse PolyNode1, PolyNode2, ... PolyNodeN — the 1-based START NODE
+        // of each string, not a node count (xLights Model::_indivStartNodes).
         const numStrings = polyModel.polyStrings || 1;
         for (let i = 0; i < numStrings; i++) {
             const polyNodeAttr = `PolyNode${i + 1}`;
             if (mxml.hasAttribute(polyNodeAttr)) {
-                const nodeCount = getIntAttrDef(mxml, polyNodeAttr, 0);
-                polyModel.polyNodeCounts.set(i, nodeCount);
+                const startNode = getIntAttrDef(mxml, polyNodeAttr, 0);
+                polyModel.polyStartNodes.set(i, startNode);
                 usedTags.add(polyNodeAttr);
             }
         }
@@ -232,23 +246,21 @@ export function createModelFromXml(mxml: Element, options?: ModelParseOptions): 
         }
     }
 
-    // Sphere: versionNumber >= 8 files store scale in the "truly round"
-    // coordinate system (upstream fixed sphere scaling: all axes now use
-    // radius = max(BufferHt, BufferWi) / (1.8 * 2), where classically X/Z used
-    // BufferHt / (1.8 * 1.8 * 2) and Y used BufferHt / (1.8 * 2)).  Our sphere
-    // renderer implements the classic semantics the golden layouts were
-    // generated with, so convert v8 scales back — the exact inverse of the
-    // legacy upgrade in upstream XmlDeserializingModelFactory::DeserializeSphere
-    // (which multiplies x,z by (Ht/mx)/1.8 and y by Ht/mx when version < 8).
+    // Sphere: the model is "truly round" (radius = max(BufferHt, BufferWi) /
+    // (1.8 * 2) on every axis, sphere.ts), and versionNumber >= 8 files store
+    // scales for that.  Older files carry the classic scales (X/Z radius
+    // BufferHt / (1.8 * 1.8 * 2), Y BufferHt / (1.8 * 2)); upgrade them like
+    // XmlDeserializingModelFactory::DeserializeSphere (x,z *= (Ht/mx)/1.8,
+    // y *= Ht/mx when version < 8 or missing).
     if (m instanceof SphereModel) {
         const sm = m as SphereModel;
         const version = parseInt(sm.versionNumber || '0');
-        if (!isNaN(version) && version >= 8) {
+        if (isNaN(version) || version < 8) {
             const f = sphereV8ScaleFactors(sm.numStrings, sm.pixelsPerString, sm.strandsPerString);
             if (f) {
-                sm.scaleX /= f.xz;
-                sm.scaleZ /= f.xz;
-                sm.scaleY /= f.y;
+                sm.scaleX *= f.xz;
+                sm.scaleZ *= f.xz;
+                sm.scaleY *= f.y;
             }
         }
     }
@@ -294,10 +306,29 @@ export function createModelFromXml(mxml: Element, options?: ModelParseOptions): 
         // Parse moving head definition for DmxMovingHead / DmxMovingHeadAdv / DmxMovingHead3D
         // (xLights converts DmxMovingHead3D → DmxMovingHeadAdv since 2024.5, but older
         // layout files may still have the old DisplayAs value.)
-        if (da === 'DmxMovingHeadAdv' || da === 'DmxMovingHead' || da === 'DmxMovingHead3D') {
-            dmxModel.mhDefinition = parseMhDefinition(dmxModel, mxml);
+        // Very old files/xmodels use DisplayAs="DMX" with DmxStyle="Moving Head *";
+        // xLights 2024 migrated those to DmxMovingHead (ModelManager::CreateModel).
+        let mhDa = da;
+        if (da === 'DMX') {
+            const style = mxml.getAttribute('DmxStyle') ?? '';
+            if (style.startsWith('Moving Head')) {
+                // "Moving Head 3D" style stays DmxMovingHead in xLights' migration
+                // (only the DmxMovingHead3D *DisplayAs* became Adv).
+                mhDa = 'DmxMovingHead';
+            }
+        }
+        if (mhDa === 'DmxMovingHeadAdv' || mhDa === 'DmxMovingHead' || mhDa === 'DmxMovingHead3D') {
+            dmxModel.mhDefinition = parseMhDefinition(dmxModel, mxml, mhDa);
 
-            if (da === 'DmxMovingHeadAdv' || da === 'DmxMovingHead3D') {
+            if (mhDa === 'DmxMovingHead3D') {
+                // xLights' DmxMovingHead3D → DmxMovingHeadAdv migration adjusts
+                // the beam: length × 1.275 ("try to match old beam length",
+                // xLights default 4.0 when the attribute is absent), Y offset 0.
+                dmxModel.dmxBeamLength = (dmxModel.dmxBeamLength > 0 ? dmxModel.dmxBeamLength : 4.0) * 1.275;
+                dmxModel.dmxBeamYOffset = 0;
+            }
+
+            if (mhDa === 'DmxMovingHeadAdv' || mhDa === 'DmxMovingHead3D') {
                 // Read controlling mesh dimensions (xLights sets RenderWi/Ht/Dp from the
                 // mesh whose set_size=true: HeadMesh > YokeMesh > BaseMesh if each has ObjFile).
                 // These are used in beam length scaling: sbl = max(W*scaleX, H*scaleY, D*scaleZ).

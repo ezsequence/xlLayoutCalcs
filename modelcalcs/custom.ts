@@ -26,8 +26,10 @@ const customProperties: ModelProperty[] = [
 ];
 
 // Parse custom model string format: "1,2,3;4,5,6|7,8,9;10,11,12"
-// Where | separates layers, ; separates rows, , separates columns
-function parseCustomModel(customModel: string): number[][][] {
+// Where | separates layers, ; separates rows, , separates columns.
+// The grid is padded to the declared CustomWidth x CustomHeight x Depth so
+// trailing empty rows the data omits keep the nodes on their buffer rows.
+function parseCustomModel(customModel: string, declWidth = 0, declHeight = 0, declDepth = 0, pad = true): number[][][] {
     const locations: number[][][] = [];
     let width = 1;
 
@@ -67,12 +69,29 @@ function parseCustomModel(customModel: string): number[][][] {
         }
     }
 
+    return pad ? padToDeclared(locations, declWidth, declHeight, declDepth) : locations;
+}
+
+// Grow a parsed grid to the declared dimensions; never shrink it.
+function padToDeclared(locations: number[][][], width: number, height: number, depth: number): number[][][] {
+    let w = 0;
+    for (const layer of locations) for (const row of layer) if (row.length > w) w = row.length;
+    if (width > w) w = width;
+    let h = 0;
+    for (const layer of locations) if (layer.length > h) h = layer.length;
+    if (height > h) h = height;
+    while (locations.length < depth) locations.push([]);
+    for (const layer of locations) {
+        while (layer.length < h) layer.push([]);
+        for (const row of layer) while (row.length < w) row.push(-1);
+    }
     return locations;
 }
 
 // Parse compressed format: "node,row,col[,layer];node,row,col[,layer];..."
-// Dimensions are derived elsewhere as they cannot be represented in this form.
-function parseCompressed(compressed: string): number[][][] {
+// The form carries no dimensions, so by default the declared ones size the grid;
+// xLights sizes it from the data, dropping trailing empty rows (customModelGrid "data").
+function parseCompressed(compressed: string, width = 0, height = 0, depth = 0, pad = true): number[][][] {
     const nodes: [number, number, number, number][] = [];
 
     const nodeStrings = compressed.split(';');
@@ -116,7 +135,7 @@ function parseCompressed(compressed: string): number[][][] {
         }
     }
 
-    return locations;
+    return pad ? padToDeclared(locations, width, height, depth) : locations;
 }
 
 export class CustomModel extends BaseModelClass {
@@ -247,10 +266,11 @@ export class CustomModel extends BaseModelClass {
         // Either attribute may be present but degenerate (e.g. newer xLights
         // writes CustomModel="" alongside real CustomModelCompressed data);
         // prefer whichever actually contains node numbers, compressed first.
+        const pad = (this.parseOptions.customModelGrid ?? 'declared') === 'declared';
         if (/\d/.test(this.customModelCompressed)) {
-            return parseCompressed(this.customModelCompressed);
+            return parseCompressed(this.customModelCompressed, this.customWidth, this.customHeight, this.customDepth, pad);
         }
-        return parseCustomModel(this.customModel);
+        return parseCustomModel(this.customModel, this.customWidth, this.customHeight, this.customDepth, pad);
     }
 
     getNodeCoords(): GetNodeResult {
@@ -270,10 +290,11 @@ export class CustomModel extends BaseModelClass {
         const height = locations[0].length;
         const width = locations[0][0].length;
 
-        // Find maximum node number and the populated bounding box.  Since
-        // xLights 2026.11 ("Keep the custom model centered in the bounding
-        // box", #6452) model/screen coords are centered on the populated
-        // cells' extents, not the grid dimensions.
+        // Find the maximum node number and the populated bounding box.
+        // Placement follows parseOptions.customModelCentering: 'grid' centres
+        // the declared grid on the position (xLights before 2026.11), 'bbox'
+        // centres the populated cells (xLights 2026.11+ #6452, crazd).
+        const gridCentred = (this.parseOptions.customModelCentering ?? 'grid') === 'grid';
         let maxval = 0;
         let minRow = height - 1, maxRow = 0;
         let minCol = width - 1, maxCol = 0;
@@ -304,6 +325,17 @@ export class CustomModel extends BaseModelClass {
         const centerRow = (minRow + maxRow) / 2.0;
         const centerCol = (minCol + maxCol) / 2.0;
         const centerLayer = (minLayer + maxLayer) / 2.0;
+        const place = (coord: NodeCoord, colIdx: number, rowIdx: number, layerIdx: number) => {
+            if (gridCentred) {
+                coord.modelX = colIdx - width / 2.0;
+                coord.modelY = height - rowIdx - 1 - height / 2.0;
+                coord.modelZ = depth - layerIdx - 1 - depth / 2.0;
+            } else {
+                coord.modelX = colIdx - centerCol;
+                coord.modelY = centerRow - rowIdx;
+                coord.modelZ = centerLayer - layerIdx;
+            }
+        };
 
         const nodemap: number[] = new Array(maxval + 1).fill(-1);
 
@@ -333,14 +365,9 @@ export class CustomModel extends BaseModelClass {
                             nn.logicalNum = idx;
 
                             const coord = defNodeCoord();
-                            // Buffer coords use parsed data dimensions (matches C++ line 950)
                             coord.bufX = layerIdx * width + colIdx;
                             coord.bufY = height - rowIdx - 1;
-                            // Model coords use parsed data dimensions (matches C++ lines 952-954)
-                            coord.modelX = colIdx - centerCol;
-                            coord.modelY = centerRow - rowIdx;
-                            coord.modelZ = centerLayer - layerIdx;
-
+                            place(coord, colIdx, rowIdx, layerIdx);
                             nn.coords.push(coord);
                             nn.logicalX = coord.bufX;
                             nn.logicalY = coord.bufY;
@@ -349,13 +376,9 @@ export class CustomModel extends BaseModelClass {
                             // Add coord to existing node
                             const existingNode = nodes[nodemap[idx]];
                             const coord = defNodeCoord();
-                            // Buffer coords use parsed data dimensions (matches C++ line 957)
                             coord.bufX = layerIdx * width + colIdx;
                             coord.bufY = height - rowIdx - 1;
-                            // Model coords use parsed data dimensions (matches C++ lines 959-961)
-                            coord.modelX = colIdx - centerCol;
-                            coord.modelY = centerRow - rowIdx;
-                            coord.modelZ = centerLayer - layerIdx;
+                            place(coord, colIdx, rowIdx, layerIdx);
                             existingNode.coords.push(coord);
                         }
                     }

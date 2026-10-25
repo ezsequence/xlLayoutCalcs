@@ -12,8 +12,12 @@ import { MhPhysicalState } from "./mhcalc";
 
 /** Beam geometry parameters from the xLights model. */
 export interface MhBeamParams {
-    /** Beam cone half-angle in degrees. */
+    /** Beam FULL cone angle in degrees (DmxBeamWidth).  xLights draws
+     *  ±width/2 around the beam axis — computeBeamDescriptor halves it. */
     dmxBeamWidth: number;
+    /** Beam Orientation (deg, Adv only): added to pan for the BEAM direction
+     *  only (the head mesh doesn't rotate).  Default 0. */
+    dmxBeamOrient?: number;
     /** Beam length in model-space units. */
     dmxBeamLength: number;
     /** Y offset of beam emission point from fixture origin. */
@@ -136,8 +140,10 @@ export function computeBeamDescriptor(
         return null;
     }
 
-    // Defaults for partially-configured beams
-    const coneHalfAngle = beamParams.dmxBeamWidth > 0 ? beamParams.dmxBeamWidth : 5;
+    // Defaults for partially-configured beams.  xLights displays half the
+    // configured DmxBeamWidth each side of the axis (default width 4 on Adv).
+    const fullWidth = beamParams.dmxBeamWidth > 0 ? beamParams.dmxBeamWidth : 4;
+    const coneHalfAngle = fullWidth / 2;
     let dmxBeamLength = beamParams.dmxBeamLength > 0 ? beamParams.dmxBeamLength : 1.0;
 
     // Step 1: Beam default direction along +X
@@ -149,8 +155,11 @@ export function computeBeamDescriptor(
     const tiltMat = mat4.create();
     mat4.rotateZ(tiltMat, mat4.create(), -state.tiltAngle * DEG_TO_RAD);
 
+    // Beam Orientation (Adv) rotates the beam relative to the head; xLights
+    // adds it to the pan used for the beam geometry only.
+    const beamPan = state.panAngle + (beamParams.dmxBeamOrient || 0);
     const panMat = mat4.create();
-    mat4.rotateY(panMat, mat4.create(), state.panAngle * DEG_TO_RAD);
+    mat4.rotateY(panMat, mat4.create(), beamPan * DEG_TO_RAD);
 
     // Step 3: Apply: panMat * tiltMat * beamDir → fixture-local beam direction
     const localDir = vec4.create();

@@ -25,7 +25,10 @@ export interface ModelChannelInfo {
     stringStartNodes?: Map<number, number>;
 }
 
+import type { ModelParseOptions } from './models';
+
 export abstract class BaseModelClass implements BaseModel {
+    parseOptions: ModelParseOptions = {};
     abstract getProperties(): ModelProperty[];
     abstract getNumNodes(): number;
     abstract getNodeCoords(): GetNodeResult;
@@ -121,14 +124,35 @@ export abstract class BaseModelClass implements BaseModel {
     }
 
     /**
+     * Channel info for a model whose nodes are dealt out to `numStrings`
+     * equal strings in node order (node i sits on string floor(i / per)),
+     * as xLights' Tree, Star, Circle, Wreath and Spinner do. Advanced mode
+     * then gives each string its own String<N> start channel.
+     */
+    protected stringRunChannelInfo(numStrings: number): ModelChannelInfo {
+        const strings = Math.max(1, numStrings);
+        const per = Math.max(1, Math.floor(this.getNumNodes() / strings));
+        return {
+            name: this.name,
+            startChannel: this.startChannel || '1',
+            stringType: this.stringType || 'RGB Nodes',
+            numStrings: strings,
+            nodesPerString: new Array(strings).fill(per),
+            advanced: this.advanced,
+            stringStartChannels: this.stringStartChannels,
+            superStringColourCount: this.superStringColours.size,
+        };
+    }
+
+    /**
      * Number of PHYSICAL strings this model's geometry declares (the xLights
      * "# Strings" / parm1-style property) — the count a controller-port
      * spreader cares about.
      *
      * The base implementation reports what the channel machinery uses
      * (`getChannelInfo().numStrings`), which is accurate for classes that
-     * override getChannelInfo (Arches, Matrix, Single Line) and 1 for the
-     * rest.  Classes that keep the single-run getChannelInfo but still
+     * override getChannelInfo (Arches, Matrix, Single Line, Poly Line) and 1
+     * for the rest.  Classes that keep the single-run getChannelInfo but still
      * declare a string count (Tree, Circle, Star, Icicles, Spinner, Cube,
      * Custom, Wreath, Sphere, Candy Canes) override this to return the
      * declared count.

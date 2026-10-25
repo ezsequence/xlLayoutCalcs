@@ -61,6 +61,10 @@ export class SpinnerModel extends BaseModelClass {
         return this.numStrings;
     }
 
+    getChannelInfo() {
+        return this.stringRunChannelInfo(this.numStrings);
+    }
+
     getNodeCoords(): GetNodeResult {
         const nodes: NodeLoc[] = [];
 

@@ -206,6 +206,13 @@ export interface GetNodeResult {
     logicalBufferHeight: number;
     logicalBufferDepth: number;
 
+    /** Per-strand node counts for models whose strands are not uniform
+     *  (Poly Line: lights per segment, as Model::GetStrandLength reports). */
+    strandLengths?: number[];
+    /** Poly Line: drop points per segment (PolyLineModel::_polyLineSizes), the
+     *  "Line Segments" buffer style's row widths. */
+    polyLineSizes?: number[];
+
     /** Metadata */
     modelType?: string;
     pixelSize?: number;

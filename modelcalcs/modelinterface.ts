@@ -12,6 +12,7 @@ import {
     computeChannelRoles,
 } from "./channels";
 import { getElementsByTagRecursive } from "./utils";
+import { parseSubModelDefs, buildSubModel, type SubModelResult } from "./submodel";
 import { DmxModel } from "./dmx";
 import type { ImageModel } from "./image";
 import type { MhBeamParams, MhWorldTransform } from "./mhbeam";
@@ -93,6 +94,8 @@ export interface ModelResult {
     active: boolean;
     nodeResult: GetNodeResult;
     channelMapping: ModelChannelMapping;
+    /** The model's <subModel> definitions resolved against its nodes, in document order. */
+    subModels: SubModelResult[];
 }
 
 export interface AllModelsResult {
@@ -109,6 +112,8 @@ export interface ParsedModelsWithChannels {
     outputManager: OutputManager;
     /** Successfully parsed model objects, in document order. */
     modelObjs: BaseModelClass[];
+    /** The <model> element each entry of modelObjs was parsed from. */
+    modelElems: Element[];
     /** Channel resolution per model name (absent = channels unresolvable). */
     resolvedChannels: Map<string, ResolvedModelWithMapping>;
 }
@@ -143,10 +148,12 @@ export function parseModelsAndResolveChannels(
     // (Single-model entry points — createModelFromXml / getModelCoordinates —
     // still throw: a caller asking for one specific model deserves the error.)
     const modelObjs: BaseModelClass[] = [];
+    const modelElems: Element[] = [];
     for (const elem of modelElements) {
         try {
             const modelObj = createModelFromXml(elem, options);
             modelObjs.push(modelObj);
+            modelElems.push(elem);
         } catch (e) {
             log(`Warning: skipping model "${elem.getAttribute('name') ?? '?'}": ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -158,7 +165,7 @@ export function parseModelsAndResolveChannels(
     const modelInfos = modelObjs.map(m => extractModelChannelInfo(m));
     const resolvedChannels = resolveAllModelChannels(modelInfos, outputManager, log);
 
-    return { outputManager, modelObjs, resolvedChannels };
+    return { outputManager, modelObjs, modelElems, resolvedChannels };
 }
 
 /**
@@ -194,7 +201,7 @@ export function getAllModelCoordinates(
     do2DProj: boolean = false,
     options?: ModelParseOptions,
 ): AllModelsResult {
-    const { outputManager, modelObjs, resolvedChannels } =
+    const { outputManager, modelObjs, modelElems, resolvedChannels } =
         parseModelsAndResolveChannels(rgbeffectsDoc, networksDoc, options);
 
     const log = options?.logger ?? ((msg: string) => console.warn(msg));
@@ -202,7 +209,8 @@ export function getAllModelCoordinates(
     // Build results with coordinates and channels
     const models = new Map<string, ModelResult>();
 
-    for (const modelObj of modelObjs) {
+    for (let mi = 0; mi < modelObjs.length; ++mi) {
+        const modelObj = modelObjs[mi];
         const resolved = resolvedChannels.get(modelObj.name);
         if (!resolved) {
             log(`Warning: channels not resolved for model: ${modelObj.name}`);
@@ -215,11 +223,15 @@ export function getAllModelCoordinates(
         // Enrich with channel info
         enrichWithChannels(nodeResult, resolved.channelMapping);
 
+        // Submodels resolve against the finished node list (channels included)
+        const subModels = parseSubModelDefs(modelElems[mi]).map(def => buildSubModel(nodeResult, def));
+
         models.set(modelObj.name, {
             name: modelObj.name,
             active: modelObj.active,
             nodeResult,
             channelMapping: resolved.channelMapping,
+            subModels,
         });
     }
 
@@ -301,6 +313,7 @@ export function getAllMovingHeads(
                 dmxBeamWidth: dmxModel.dmxBeamWidth,
                 dmxBeamLength: dmxModel.dmxBeamLength,
                 dmxBeamYOffset: dmxModel.dmxBeamYOffset,
+                dmxBeamOrient: dmxModel.dmxBeamOrient,
                 dmxBeamLimit: dmxModel.dmxBeamLimit,
                 meshWidth: dmxModel.meshWidth,
                 meshHeight: dmxModel.meshHeight,

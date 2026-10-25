@@ -18,6 +18,9 @@ this library computes what xLights itself would compute:
   state, and beam geometry per frame
 - XML format migration between the legacy (`<2026.2`) and current (`>2026.3`)
   xLights layout formats, in both directions
+- World-placement transforms: move, rotate, and scale a whole layout (or
+  single models / view objects) by an affine matrix, rewriting every
+  placement kind xLights has (boxed, two-point, three-point, poly line)
 
 Both layout formats are read natively — model elements are normalized forward
 on load, so legacy files need no pre-migration.

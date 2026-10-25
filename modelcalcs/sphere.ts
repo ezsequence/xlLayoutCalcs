@@ -84,10 +84,12 @@ export class SphereModel extends BaseModelClass {
         let logicalBufferHeight: number;
 
         if (this.singleNode) {
-            // Single node mode: one node per string, all lights as coords
+            // Single node mode: one node per string, all lights as coords.
+            // MatrixModel::InitSingleChannelModel, horizontal branch (a sphere
+            // is never a vMatrix): one column, a row per string.
             const nodeCount = this.numStrings;
-            logicalBufferWidth = nodeCount;
-            logicalBufferHeight = 1;
+            logicalBufferWidth = 1;
+            logicalBufferHeight = nodeCount;
 
             for (let n = 0; n < nodeCount; n++) {
                 const nn = defNodeLoc();
@@ -95,15 +97,15 @@ export class SphereModel extends BaseModelClass {
                 nn.physicalStrand = n;
                 nn.physicalNumOnStrand = 0;
                 nn.logicalNum = n;
-                nn.logicalX = n;
-                nn.logicalY = 0;
+                const bufY = isLtoR ? n : numStrands - n - 1;
+                nn.logicalX = 0;
+                nn.logicalY = bufY;
 
                 // Create coords for all lights on this string
                 for (let c = 0; c < pixelsPerString; c++) {
                     const coord = defNodeCoord();
-                    // All coords at same buffer position (column = string index)
-                    coord.bufX = n;
-                    coord.bufY = 0;
+                    coord.bufX = 0;
+                    coord.bufY = bufY;
                     nn.coords.push(coord);
                 }
                 nodes.push(nn);
@@ -175,12 +177,12 @@ export class SphereModel extends BaseModelClass {
             return { toWorldCoords, toWorld2DCoords, logicalBufferWidth, logicalBufferHeight, logicalBufferDepth: 1, nodes };
         }
 
-        const RenderHt = sphereHeight / 1.8;
-        const RenderWi = RenderHt / 1.8;
+        // xLights 2026.02+ (model versionNumber 8): one radius on every axis.
+        const RenderMx = Math.max(sphereHeight, sphereWidth) / 1.8;
 
         const Hradians = toRadians(360);
-        const Hradius = RenderWi / 2.0;
-        const Vradius = RenderHt / 2.0;
+        const Hradius = RenderMx / 2.0;
+        const Vradius = RenderMx / 2.0;
 
         const remove = toRadians(360.0 - this.sphereDegrees);
         const fudge = toRadians((360.0 - this.sphereDegrees) / sphereWidth);

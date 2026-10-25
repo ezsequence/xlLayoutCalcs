@@ -1,6 +1,6 @@
 {
   "name": "xllayoutcalcs",
-  "version": "0.3.3",
+  "version": "0.4.1",
   "type": "module",
   "main": "./dist/xlcoords.cjs",
   "module": "./dist/xlcoords.mjs",

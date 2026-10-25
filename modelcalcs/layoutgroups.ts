@@ -26,6 +26,8 @@ export interface LayoutGroupInfo {
     backgroundBrightness?: number;
     /** Background image alpha, 0–100. */
     backgroundAlpha?: number;
+    /** xLights "Fill": stretch the background to the pane. Absent means false (xLights default). */
+    scaleImage?: boolean;
 }
 
 function readAttr(el: Element, ...names: string[]): string {
@@ -34,6 +36,12 @@ function readAttr(el: Element, ...names: string[]): string {
         if (v != null && v !== '') return v;
     }
     return '';
+}
+
+// xLights semantics for scaleImage: wxAtoi(value) > 0.
+function readIntBoolAttr(el: Element, ...names: string[]): boolean | undefined {
+    const num = readNumAttr(el, ...names);
+    return num === undefined ? undefined : Math.trunc(num) > 0;
 }
 
 function readNumAttr(el: Element, ...names: string[]): number | undefined {
@@ -92,6 +100,7 @@ export function getAllLayoutGroups(rgbeffectsDoc: Document): LayoutGroupInfo[] {
             paneHeight: readPaneAttr(el, 'PaneHeight', 'paneHeight'),
             backgroundBrightness: readNumAttr(el, 'backgroundBrightness', 'BackgroundBrightness'),
             backgroundAlpha: readNumAttr(el, 'backgroundAlpha', 'BackgroundAlpha'),
+            scaleImage: readIntBoolAttr(el, 'scaleImage', 'ScaleImage'),
         });
     }
 

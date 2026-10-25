@@ -10,6 +10,7 @@ import { defEffectBufferDescriptionOutput } from "./modelshared";
 import { defNodeCoord } from "./modelshared";
 import { defNodeLoc } from "./modelshared";
 import { BaseModelClass } from "./modelshared";
+import { ModelChannelInfo } from "./modelshared";
 
 interface PolyPoint {
     x: number;
@@ -112,6 +113,14 @@ class BezierCurve {
         return this.points.length;
     }
 
+    getNumSegments(): number {
+        return this.segmentLengths.length;
+    }
+
+    getSegLength(index: number): number {
+        return index < this.segmentLengths.length ? this.segmentLengths[index] : 0;
+    }
+
     // Get a pre-calculated point by index
     getPoint(index: number): [number, number, number] {
         if (index < 0) return this.points[0];
@@ -208,9 +217,10 @@ export class PolyLineModel extends BaseModelClass {
     // Key is corner index (0-based), value is "Leading Segment", "Trailing Segment", or "Neither"
     cornerSettings: Map<number, string> = new Map();
 
-    // Dynamic node counts per string (PolyNode1, PolyNode2, etc.)
-    // Key is string index (0-based), value is node count for that string
-    polyNodeCounts: Map<number, number> = new Map();
+    // Per-string start NODE numbers (PolyNode1, PolyNode2, ...), 1-based,
+    // keyed by 0-based string index.  xLights keeps these in
+    // Model::_indivStartNodes and writes them whenever "# Strings" > 1.
+    polyStartNodes: Map<number, number> = new Map();
 
     constructor() {super();}
 
@@ -227,6 +237,51 @@ export class PolyLineModel extends BaseModelClass {
             return this.polyStrings;  // One node per string in single node mode
         }
         return this.numLights;
+    }
+
+    /**
+     * A Poly Line with more than one string puts each string at a start NODE
+     * inside the model's single channel range (`PolyNode<N>`), the same way a
+     * Custom model's `String<N>` works — xLights resolves both through
+     * Model::SetStringStartChannels.  Individual start CHANNELS (Advanced
+     * mode) take precedence over start nodes there, so those are left to the
+     * advanced path.  With neither, the strings are an equal division.
+     *
+     * Without this override the base class reported one string and a
+     * multi-connection Poly Line uploaded as a single port.
+     */
+    getChannelInfo(): ModelChannelInfo {
+        const strings = Math.max(1, this.polyStrings);
+        const total = this.getNumNodes();
+        if (strings <= 1 || total <= 0) return super.getChannelInfo();
+
+        // xLights only treats the start nodes as individual when PolyNode1 is
+        // present (XmlDeserializingModelFactory::DeserializePolyLine).
+        const indivChans = this.advanced && this.stringStartChannels.size > 0;
+        if (indivChans || !this.polyStartNodes.has(0)) {
+            return this.stringRunChannelInfo(strings);
+        }
+
+        const starts: number[] = [];
+        for (let i = 0; i < strings; i++) {
+            const given = this.polyStartNodes.get(i);
+            // Model::ComputeStringStartNode for anything not given.
+            starts.push(given && given > 0 ? given : Math.floor((i * total) / strings) + 1);
+        }
+        // PolyLineModel::NodesPerString(string): up to the next string's start
+        // node, the last string to the end of the model.  Unlike a Custom
+        // model this takes the next string by index, not the next higher
+        // start, so out-of-order starts would overlap — as they do in xLights.
+        const counts = starts.map((start, i) =>
+            Math.max(0, (i === strings - 1 ? total + 1 : starts[i + 1]) - start),
+        );
+
+        return {
+            ...super.getChannelInfo(),
+            numStrings: strings,
+            nodesPerString: counts,
+            stringStartNodes: new Map(starts.map((s, i) => [i, s])),
+        };
     }
 
     parseDropPattern(): number[] {
@@ -294,6 +349,101 @@ export class PolyLineModel extends BaseModelClass {
         }
 
         return points;
+    }
+
+    // Lights per segment (Model::GetStrandLength for a Poly Line): the drop
+    // pattern applied to each segment's drop points for individual segments,
+    // else the float32 segment walk of DistributeLightsEvenly, counting the
+    // drop points that land in each segment (curves by sub-segment).
+    computeStrandLengths(pPos: PolyPoint[], dropSizes: number[]): number[] {
+        return this.computeSegmentCounts(pPos, dropSizes).lengths;
+    }
+
+    // { lengths: GetStrandLength per segment, sizes: _polyLineSizes (drop points) }
+    computeSegmentCounts(pPos: PolyPoint[], dropSizes: number[]): { lengths: number[]; sizes: number[] } {
+        const segments = pPos.length - 1;
+        if (this.singleNode || segments < 1) return { lengths: [1], sizes: segments < 1 ? [] : new Array<number>(segments).fill(0) };
+        const fr = Math.fround;
+        const nd = Math.max(1, dropSizes.length);
+        const drop = (i: number) => Math.abs(dropSizes[i % nd] ?? 1);
+        const sizes = new Array<number>(segments).fill(0);
+        const dropLights = new Array<number>(segments).fill(0);
+        let dropIndex = 0;
+        if (this.hasIndivSeg) {
+            for (let x = 0; x < segments; x++) {
+                const points = this.segmentSizes.get(x) || 0;
+                let lights = 0;
+                for (let z = 0; z < points; z++) lights += drop(dropIndex++);
+                sizes[x] = points;
+                dropLights[x] = lights;
+            }
+            return { lengths: sizes.map((s, i) => dropLights[i] || s), sizes };
+        }
+        let numLights = 0, numDropPoints = 0;
+        for (let lights = this.numLights; lights > 0;) {
+            const d = drop(dropIndex++);
+            numLights += d;
+            numDropPoints++;
+            lights -= d;
+        }
+        const segLen: number[][] = [];
+        let totalLength = 0;
+        for (let i = 0; i < segments; i++) {
+            const lens: number[] = [];
+            const curve = pPos[i].hasCurve ? pPos[i].curve : undefined;
+            if (curve) {
+                for (let k = 0; k < curve.getNumSegments(); k++) lens.push(fr(curve.getSegLength(k)));
+            } else {
+                const dx = fr(pPos[i + 1].x - pPos[i].x);
+                const dy = fr(pPos[i + 1].y - pPos[i].y);
+                const dz = fr(pPos[i + 1].z - pPos[i].z);
+                lens.push(fr(Math.sqrt(fr(fr(fr(dz * dz) + fr(dy * dy)) + fr(dx * dx)))));
+            }
+            let sum = 0;
+            for (const l of lens) sum = fr(sum + l);
+            totalLength = fr(totalLength + sum);
+            segLen.push(lens);
+        }
+        let maxH = 0;
+        for (const d of dropSizes) maxH = Math.max(maxH, Math.abs(d));
+        const usingIcicles = maxH > 1;
+        const cpn = Math.max(1, this.lightsPerNode);
+        const lightsToDistribute = numLights * cpn;
+        const offset = fr(totalLength / fr(numDropPoints * (usingIcicles ? 1 : cpn)));
+        let currentPos = fr(offset / 2);
+        let segment = 0, sub = 0;
+        let segStart = currentPos;
+        let segmentLength = segLen[0][0];
+        let segEnd = fr(segStart + segmentLength);
+        let dropPosCount = 0, lastDropPosCount = 0;
+        dropIndex = 0;
+        for (let m = 0; m < lightsToDistribute;) {
+            while (currentPos > segEnd) {
+                sub++;
+                if (pPos[segment].hasCurve && sub < segLen[segment].length) {
+                    segStart = segEnd;
+                    segmentLength = segLen[segment][sub];
+                    segEnd = fr(segStart + segmentLength);
+                } else if (segment === segments - 1) {
+                    segEnd = fr(segEnd + fr(0.0001)); // last segment: fudge the end
+                } else {
+                    sub = 0;
+                    sizes[segment] = dropPosCount - lastDropPosCount;
+                    lastDropPosCount = dropPosCount;
+                    segment++;
+                    segStart = segEnd;
+                    segmentLength = segLen[segment][0];
+                    segEnd = fr(segStart + segmentLength);
+                }
+            }
+            const d = drop(dropIndex++);
+            m += d * (usingIcicles ? cpn : 1);
+            dropLights[segment] += d;
+            currentPos = fr(currentPos + offset);
+            dropPosCount++;
+        }
+        sizes[segment] = dropPosCount - lastDropPosCount;
+        return { lengths: sizes.map((s, i) => dropLights[i] || s), sizes };
     }
 
     getNodeCoords(): GetNodeResult {
@@ -817,6 +967,8 @@ export class PolyLineModel extends BaseModelClass {
             logicalBufferHeight,
             logicalBufferDepth: 1,
             nodes,
+            strandLengths: this.computeSegmentCounts(pPos, dropSizes).lengths,
+            polyLineSizes: this.computeSegmentCounts(pPos, dropSizes).sizes,
         };
     }
 

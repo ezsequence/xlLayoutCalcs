@@ -33,6 +33,7 @@ const dmxProperties: ModelProperty[] = [
     {name: 'DmxBeamWidth', ptype: "FLOAT", fieldName: 'dmxBeamWidth', xmlName: 'DmxBeamWidth', description: "Beam Width"},
     {name: 'DmxBeamLength', ptype: "FLOAT", fieldName: 'dmxBeamLength', xmlName: 'DmxBeamLength', description: "Beam Length"},
     {name: 'DmxBeamYOffset', ptype: "FLOAT", fieldName: 'dmxBeamYOffset', xmlName: 'DmxBeamYOffset', description: "Beam Y Offset"},
+    {name: 'DmxBeamOrient', ptype: "FLOAT", fieldName: 'dmxBeamOrient', xmlName: 'DmxBeamOrient', description: "Beam Orientation"},
     // Pan/tilt motor channels (used by older DmxMovingHead; DmxMovingHeadAdv uses mhDefinition)
     {name: 'DmxPanChannel', ptype: "INTEGER", fieldName: 'dmxPanChannel', xmlName: 'DmxPanChannel', description: "Pan Channel"},
     {name: 'DmxPanOrient', ptype: "INTEGER", fieldName: 'dmxPanOrient', xmlName: 'DmxPanOrient', description: "Pan Orient"},
@@ -84,6 +85,7 @@ export class DmxModel extends BaseModelClass {
     dmxBeamWidth: number = 0;
     dmxBeamLength: number = 0;
     dmxBeamYOffset: number = 0;
+    dmxBeamOrient: number = 0;
 
     // Pan/tilt motor channels
     dmxPanChannel: number = 0;

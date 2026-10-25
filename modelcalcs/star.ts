@@ -93,6 +93,10 @@ export class StarModel extends BaseModelClass {
         return this.numStrings;
     }
 
+    getChannelInfo() {
+        return this.stringRunChannelInfo(this.numStrings);
+    }
+
     getNodeCoords(): GetNodeResult {
         const nodes: NodeLoc[] = [];
         let logicalBufferWidth = 1, logicalBufferHeight = 1, logicalBufferDepth = 1;

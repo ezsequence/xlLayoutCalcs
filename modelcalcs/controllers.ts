@@ -10,6 +10,8 @@ import type { ModelParseOptions } from './models';
 import type { ModelChannelMapping } from './modelbase';
 import type { BaseModelClass } from './modelshared';
 import { parseModelsAndResolveChannels } from './modelinterface';
+import type { DmxModel } from './dmx';
+import { mhNoDimChannels } from './dimming';
 
 // ---------------------------------------------------------------------------
 // Optional-attribute helpers: set-vs-unset semantics.
@@ -336,6 +338,20 @@ export interface XlModelChannelInfo {
      * computed as min(1, (100 + value) / 100); default 1.
      */
     brightness: number;
+
+    /** True when this model parsed as a moving head (has an mhDefinition). */
+    isMovingHead: boolean;
+    /**
+     * 0-based channel offsets within [startChannel, startChannel+channelCount)
+     * that do NOT carry light intensity and must pass through unscaled by a
+     * brightness pass: for a moving head its motors, shutter, colour-wheel slot,
+     * presets, and any channel not positively known to be intensity; for a
+     * non-MH DMX device (servo/skull/...) whose channels we don't interpret,
+     * every channel; empty for a plain pixel model, where all channels are
+     * colour.  A layout fact only — whether to dim a model at all (e.g. skip
+     * heads) is a preference for a planning layer above this, not encoded here.
+     */
+    noDimChannels: number[];
 
     /**
      * Controller NAME this model is bound to (`Controller` attr on `<model>`);
@@ -712,18 +728,35 @@ export function getControllersAndModelChannels(
             // get case-renamed), so no migration is needed to read them.
             const cc = getOptionalElementByTag(mdl, 'ControllerConnection');
 
-            const strings = derivePhysicalStrings(resolved.channelMapping, objByName.get(name));
+            const obj = objByName.get(name);
+            const strings = derivePhysicalStrings(resolved.channelMapping, obj);
+
+            const displayAs = getAttrDef(mdl, 'DisplayAs', '');
+            const channelCount = resolved.channelMapping.totalChannels;
+            // The parsed model is already in hand, so the MH classification is
+            // free here — no second resolve pass.  A moving head lists its
+            // control channels as no-dim; an uninterpretable non-MH DMX device
+            // treats every channel as no-dim; a pixel model, none.
+            const mhDef = (obj as DmxModel | undefined)?.mhDefinition;
+            const isMovingHead = mhDef !== undefined;
+            const noDimChannels = isMovingHead
+                ? mhNoDimChannels(mhDef!, channelCount)
+                : displayAs.startsWith('Dmx')
+                    ? Array.from({ length: channelCount }, (_, i) => i)
+                    : [];
 
             const model: XlModelChannelInfo = {
                 name,
-                displayAs: getAttrDef(mdl, 'DisplayAs', ''),
+                displayAs,
                 // channelMapping is 0-based internally; surface 1-based.
                 startChannel: resolved.channelMapping.firstChannel + 1,
-                channelCount: resolved.channelMapping.totalChannels,
+                channelCount,
                 rgbOffsets: rgbOffsets ? { ...rgbOffsets } : { r: 0, g: 1, b: 2 },
                 simple: !!rgbOffsets,
                 gamma,
                 brightness,
+                isMovingHead,
+                noDimChannels,
                 nodeCount: resolved.channelMapping.totalNodes,
                 controllerName: getAttrDef(mdl, 'Controller', ''),
                 controllerPort: cc ? getNumAttrDef(cc, 'Port', 0) : 0,
